@@ -659,6 +659,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SectorGenerator
   seed: 1
+  fieldRadius: 2400
   skyboxes:
   - skybox: {fileID: 2100000, guid: 40bf7a89f64d5ae4e8c84862253ebde2, type: 2}
     sectorColor: {r: 0.18431373, g: 0.27450982, b: 0.18823531, a: 1}
@@ -670,7 +671,11 @@ MonoBehaviour:
     sectorColor: {r: 0.03137255, g: 0.0627451, b: 0.14117648, a: 1}
   - skybox: {fileID: 2100000, guid: 2c0842cfd64986c468fce0ed044b287f, type: 2}
     sectorColor: {r: 0.09019608, g: 0.09019608, b: 0.09019608, a: 1}
+  starLight: {fileID: 410087040}
   planetPrefab: {fileID: 4515702753697735421, guid: f8af5cb544b0ce545ac4c0736456abcc, type: 3}
+  minPlanets: 0
+  maxPlanets: 3
+  sectorRadius: 30000
   aridPlanets:
   - {fileID: 2800000, guid: db9c1fe5ce918504aae237d29ccbdab6, type: 3}
   - {fileID: 2800000, guid: 5c4e934f242ec01448e633cddfe22299, type: 3}
@@ -758,14 +763,7 @@ MonoBehaviour:
   - {fileID: 2800000, guid: 292f18cb02580344788c127d699a277e, type: 3}
   - {fileID: 2800000, guid: 1906fc7f98538e946b71196c3c6a5ad3, type: 3}
   - {fileID: 2800000, guid: 7c43e93660155b840be0d99c945fec92, type: 3}
-  starLight: {fileID: 410087040}
-  minPlanets: 0
-  maxPlanets: 3
-  sectorRadius: 30000
-  minAsteroids: 400
-  maxAsteroids: 1000
-  asteroidRadius: 200
-  minAsteroidDistance: 20
+  maxAsteroids: 500
   asteroidTextures:
   - {fileID: 2800000, guid: cba72caa6f7c1474b9853459c25660ba, type: 3}
   - {fileID: 2800000, guid: 1594388941bb73c40b201e96fc99de50, type: 3}
@@ -878,26 +876,18 @@ MonoBehaviour:
     - {fileID: 6235002641228881339, guid: 30d6480225480044ca14bfe4098a05bc, type: 3}
     - {fileID: 1946147959062100851, guid: aecc4bcdf69babc41a34dd3643c22d1e, type: 3}
     spawnChance: 70
-    scaleRange: {x: 200, y: 200}
+    scaleRange: {x: 300, y: 300}
   clusters:
     minClusters: 3
     maxClusters: 6
     minAsteroids: 20
     maxAsteroids: 50
     clusterRadius: 250
-    minDistanceFromCenter: 500
   superClusters:
     count: 1
     minAsteroids: 80
     maxAsteroids: 150
     radius: 600
-    minDistanceFromCenter: 800
-  ring:
-    minAsteroids: 80
-    maxAsteroids: 150
-    radius: 1200
-    thickness: 150
-  fieldRadius: 2400
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

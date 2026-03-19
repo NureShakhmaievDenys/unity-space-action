@@ -2,20 +2,16 @@ using UnityEngine;
 using System.Collections.Generic;
 
 public class SectorGenerator : MonoBehaviour
-
 {
-    private int currentAsteroids = 0;
+    #region Settings Classes
     [System.Serializable]
     public class ClusterSettings
     {
         public int minClusters = 3;
         public int maxClusters = 6;
-
         public int minAsteroids = 20;
         public int maxAsteroids = 50;
-
-        public float clusterRadius = 250f;
-        public float minDistanceFromCenter = 500f;
+        public float clusterRadius = 400f; // Слегка увеличил для лучшего распределения в центре
     }
 
     [System.Serializable]
@@ -24,20 +20,9 @@ public class SectorGenerator : MonoBehaviour
         public int count = 1;
         public int minAsteroids = 80;
         public int maxAsteroids = 150;
-
-        public float radius = 600f;
-        public float minDistanceFromCenter = 800f;
+        public float radius = 800f;
     }
 
-    [System.Serializable]
-    public class RingSettings
-    {
-        public int minAsteroids = 80;
-        public int maxAsteroids = 150;
-
-        public float radius = 1200f;
-        public float thickness = 150f;
-    }
     [System.Serializable]
     public class SectorSkybox
     {
@@ -52,16 +37,22 @@ public class SectorGenerator : MonoBehaviour
         public float spawnChance;
         public Vector2 scaleRange;
     }
+    #endregion
 
-    [Header("Seed")]
+    [Header("Seed & Core")]
     public int seed = 12345;
+    public float fieldRadius = 2400f;
 
-    [Header("Skyboxes")]
+    [Header("Skyboxes & Lighting")]
     public SectorSkybox[] skyboxes;
+    public Light starLight;
 
-    [Header("Planet Prefab")]
+    [Header("Planets")]
     public GameObject planetPrefab;
-
+    public int minPlanets = 0;
+    public int maxPlanets = 3;
+    public float sectorRadius = 40000f;
+    
     [Header("Planet Textures")]
     public Texture2D[] aridPlanets;
     public Texture2D[] barrenPlanets;
@@ -76,93 +67,91 @@ public class SectorGenerator : MonoBehaviour
     public Texture2D[] tundraPlanets;
     public Texture2D[] gasGiantPlanets;
 
-    [Header("Lighting")]
-    public Light starLight;
-
-    [Header("Planet Settings")]
-    public int minPlanets = 0;
-    public int maxPlanets = 3;
-    public float sectorRadius = 40000f;
-
-    [Header("Asteroids")]
-    public int minAsteroids = 50;
-    public int maxAsteroids = 200;
-    public float asteroidRadius = 35000f;
-    public float minAsteroidDistance = 500f;
-    [Header("Asteroid Textures")]
+    [Header("Asteroids General")]
+    public int maxAsteroids = 500;
     public Texture2D[] asteroidTextures;
-    [Header("Asteroid Groups")]
     public AsteroidGroup[] asteroidGroups;
-    [Header("Cluster Settings")]
-    public ClusterSettings clusters;
 
-    [Header("Super Clusters")]
+    [Header("Asteroid Structures")]
+    public ClusterSettings clusters;
     public SuperClusterSettings superClusters;
 
-    [Header("Asteroid Ring")]
-    public RingSettings ring;
-    [Header("Field Settings")]
-    public float fieldRadius = 2400f;
+    // Служебные переменные
+    private int currentAsteroids = 0;
+    private Transform planetsContainer;
+    private Transform asteroidsContainer;
+
     void Start()
     {
         GenerateSector();
     }
 
-    void GenerateSector()
+    [ContextMenu("Generate New Sector")]
+    public void GenerateSector()
     {
+        ClearSector();
         Random.InitState(seed);
+        CreateContainers();
 
-        if (skyboxes == null || skyboxes.Length == 0)
+        if (skyboxes != null && skyboxes.Length > 0)
         {
-            Debug.LogWarning("No skyboxes assigned!");
-            return;
+            SectorSkybox sector = skyboxes[Random.Range(0, skyboxes.Length)];
+            RenderSettings.skybox = sector.skybox;
+            if (starLight != null) starLight.color = sector.sectorColor;
+            
+            GeneratePlanets(sector.sectorColor);
+            GenerateAsteroids();
         }
-
-        SectorSkybox sector = skyboxes[Random.Range(0, skyboxes.Length)];
-
-        RenderSettings.skybox = sector.skybox;
-
-        if (starLight != null)
-            starLight.color = sector.sectorColor;
-
-        GeneratePlanets(sector.sectorColor);
-        GenerateAsteroids(); // 👈 добавили
+        else
+        {
+            Debug.LogError("Skyboxes not assigned!");
+        }
     }
+
+    void ClearSector()
+    {
+        currentAsteroids = 0;
+        for (int i = transform.childCount - 1; i >= 0; i--)
+        {
+            GameObject child = transform.GetChild(i).gameObject;
+            if (Application.isPlaying) Destroy(child);
+            else DestroyImmediate(child);
+        }
+    }
+
+    void CreateContainers()
+    {
+        planetsContainer = new GameObject("--- PLANETS ---").transform;
+        planetsContainer.SetParent(this.transform);
+
+        asteroidsContainer = new GameObject("--- ASTEROIDS ---").transform;
+        asteroidsContainer.SetParent(this.transform);
+    }
+
+    // ===================== ПЛАНЕТЫ =====================
+
     void GeneratePlanets(Color sectorColor)
     {
-        if (planetPrefab == null)
-        {
-            Debug.LogWarning("Planet prefab missing!");
-            return;
-        }
+        if (planetPrefab == null) return;
 
         int planetCount = Random.Range(minPlanets, maxPlanets + 1);
-
         List<Vector3> planetPositions = new List<Vector3>();
-        float minDistance = 30000f;
 
         for (int i = 0; i < planetCount; i++)
         {
             Vector3 position;
             int attempts = 0;
-
-            do
-            {
+            do {
                 position = Random.onUnitSphere * sectorRadius;
                 attempts++;
-            }
-            while (IsTooClose(position, planetPositions, minDistance) && attempts < 30);
+            } while (IsTooClose(position, planetPositions, 20000f) && attempts < 50);
 
             planetPositions.Add(position);
-
-            GameObject planet = Instantiate(planetPrefab, position, Quaternion.identity);
-
+            GameObject planet = Instantiate(planetPrefab, position, Quaternion.identity, planetsContainer);
+            planet.name = $"Planet_{i}";
             SetupPlanet(planet, sectorColor);
         }
     }
-    // ===================== ПЛАНЕТЫ =====================
-
-   
 
     void SetupPlanet(GameObject planet, Color sectorColor)
     {
@@ -171,242 +160,157 @@ public class SectorGenerator : MonoBehaviour
 
         int type = Random.Range(0, 12);
         Texture2D texture = GetPlanetTexture(type);
+        
+        MaterialPropertyBlock propBlock = new MaterialPropertyBlock();
+        renderer.GetPropertyBlock(propBlock);
+        if (texture != null) propBlock.SetTexture("_BaseMap", texture);
+        renderer.SetPropertyBlock(propBlock);
 
-        Material mat = new Material(renderer.sharedMaterial);
-
-        if (texture != null)
-            mat.SetTexture("_BaseMap", texture);
-
-        renderer.material = mat;
-
-        float size = Random.Range(5000f, 12000f);
-        if (type == 11)
-            size = Random.Range(15000f, 25000f);
-
+        float size = (type == 11) ? Random.Range(15000f, 25000f) : Random.Range(5000f, 12000f);
         planet.transform.localScale = Vector3.one * size;
-
-        float tilt = Random.Range(-35f, 35f);
-
-        planet.transform.rotation =
-            Quaternion.Euler(tilt, Random.Range(0f, 360f), 0f);
-
-        PlanetRotation rotation = planet.AddComponent<PlanetRotation>();
-
-        rotation.rotationSpeed = (type == 11)
-            ? Random.Range(4f, 10f)
-            : Random.Range(1f, 5f);
+        planet.transform.rotation = Quaternion.Euler(Random.Range(-35f, 35f), Random.Range(0f, 360f), 0f);
 
         Transform atmosphere = planet.transform.Find("PlanetAtmosphere");
-
         if (atmosphere != null)
         {
             Renderer atmRenderer = atmosphere.GetComponent<Renderer>();
-
-            if (atmRenderer != null)
-                atmRenderer.material.SetColor("_BaseColor", sectorColor);
-        }
-    }
-    void GenerateAsteroids()
-    {
-        if (asteroidGroups == null || asteroidGroups.Length == 0)
-        {
-            Debug.LogWarning("No asteroid groups!");
-            return;
-        }
-
-     
-
-        GenerateClusters(fieldRadius);
-        GenerateSuperClusters(fieldRadius);
-        GenerateAsteroidRing(fieldRadius);
-    }
-    void GenerateClusters(float fieldRadius)
-    {
-        int clusterCount = Random.Range(clusters.minClusters, clusters.maxClusters);
-
-        for (int c = 0; c < clusterCount; c++)
-        {
-            Vector3 center = Random.onUnitSphere * 
-                             Random.Range(clusters.minDistanceFromCenter, fieldRadius);
-
-            int count = Random.Range(clusters.minAsteroids, clusters.maxAsteroids);
-
-            for (int i = 0; i < count; i++)
+            if (atmRenderer != null) 
             {
-                Vector3 pos = center + Random.insideUnitSphere * clusters.clusterRadius;
-
-                if (!ValidPosition(pos)) continue;
-                if (!PassNoise(pos)) continue;
-
-                SpawnAsteroid(pos);
+                MaterialPropertyBlock atmBlock = new MaterialPropertyBlock();
+                atmRenderer.GetPropertyBlock(atmBlock);
+                atmBlock.SetColor("_BaseColor", sectorColor);
+                atmRenderer.SetPropertyBlock(atmBlock);
             }
         }
     }
-    void GenerateSuperClusters(float fieldRadius)
+
+    // ===================== АСТЕРОИДЫ =====================
+
+    void GenerateAsteroids()
+    {
+        if (asteroidGroups == null || asteroidGroups.Length == 0) return;
+
+        Transform clustersParent = new GameObject("Clusters").transform;
+        clustersParent.SetParent(asteroidsContainer);
+
+        Transform superParent = new GameObject("Super Clusters").transform;
+        superParent.SetParent(asteroidsContainer);
+
+        GenerateClusters(clustersParent);
+        GenerateSuperClusters(superParent);
+    }
+
+    void GenerateClusters(Transform parent)
+    {
+        int count = Random.Range(clusters.minClusters, clusters.maxClusters);
+        for (int c = 0; c < count; c++)
+        {
+            Transform clusterFolder = new GameObject($"Cluster_{c}").transform;
+            clusterFolder.SetParent(parent);
+
+            // Центр кластера немного смещен от 0,0,0 чтобы они не слипались в одну точку
+            Vector3 center = Random.insideUnitSphere * clusters.clusterRadius;
+            int amount = Random.Range(clusters.minAsteroids, clusters.maxAsteroids);
+
+            for (int i = 0; i < amount; i++)
+            {
+                Vector3 pos = center + Random.insideUnitSphere * clusters.clusterRadius;
+                if (ValidPosition(pos) && PassNoise(pos)) SpawnAsteroid(pos, clusterFolder);
+            }
+        }
+    }
+
+    void GenerateSuperClusters(Transform parent)
     {
         for (int c = 0; c < superClusters.count; c++)
         {
-            Vector3 center = Random.onUnitSphere * 
-                             Random.Range(superClusters.minDistanceFromCenter, fieldRadius);
+            Transform folder = new GameObject($"SuperCluster_{c}").transform;
+            folder.SetParent(parent);
 
-            int count = Random.Range(superClusters.minAsteroids, superClusters.maxAsteroids);
+            // Суперкластер всегда в самом центре
+            Vector3 center = Vector3.zero;
+            int amount = Random.Range(superClusters.minAsteroids, superClusters.maxAsteroids);
 
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < amount; i++)
             {
                 Vector3 pos = center + Random.insideUnitSphere * superClusters.radius;
-
-                if (!ValidPosition(pos)) continue;
-                if (!PassNoise(pos)) continue;
-
-                SpawnAsteroid(pos);
+                if (ValidPosition(pos) && PassNoise(pos)) SpawnAsteroid(pos, folder);
             }
         }
     }
-    void GenerateAsteroidRing(float fieldRadius)
-    {
-        int count = Random.Range(ring.minAsteroids, ring.maxAsteroids);
 
-        for (int i = 0; i < count; i++)
+    void SpawnAsteroid(Vector3 pos, Transform parent)
+    {
+        if (currentAsteroids >= maxAsteroids) return;
+
+        var asteroidData = GetRandomAsteroidData();
+        if (asteroidData.prefab == null) return;
+
+        GameObject asteroid = Instantiate(asteroidData.prefab, pos, Random.rotation, parent);
+        asteroid.transform.localScale = Vector3.one * asteroidData.scale;
+
+        Renderer r = asteroid.GetComponentInChildren<Renderer>();
+        if (r != null && asteroidTextures.Length > 0)
         {
-            float angle = Random.Range(0f, Mathf.PI * 2);
-
-            Vector3 pos = new Vector3(
-                Mathf.Cos(angle) * ring.radius,
-                Random.Range(-ring.thickness, ring.thickness),
-                Mathf.Sin(angle) * ring.radius
-            );
-
-            if (!ValidPosition(pos)) continue;
-            if (!PassNoise(pos)) continue;
-
-            SpawnAsteroid(pos);
-        }
-    }
-    bool ValidPosition(Vector3 pos)
-    {
-        // ограничение по количеству
-        if (currentAsteroids >= maxAsteroids)
-            return false;
-
-        // ограничение по радиусу сектора
-        if (pos.magnitude > fieldRadius)
-            return false;
-
-        return true;
-    }
-    bool PassNoise(Vector3 pos)
-    {
-        float scale = 0.002f;
-
-        float noise = Mathf.PerlinNoise(
-            pos.x * scale + seed,
-            pos.z * scale + seed
-        );
-
-        return noise > 0.4f; // чем больше — тем реже астероиды
-    }
-    void SpawnAsteroid(Vector3 pos)
-    {
-        GameObject prefab = GetRandomAsteroid();
-        if (prefab == null) return;
-
-        GameObject asteroid = Instantiate(prefab, pos, Random.rotation);
-
-        float scale = Mathf.Max(100f, GetAsteroidScale(prefab));
-        asteroid.transform.localScale = Vector3.one * scale;
-
-        Renderer renderer = asteroid.GetComponentInChildren<Renderer>();
-
-        if (renderer != null && asteroidTextures.Length > 0)
-        {
-            Texture2D tex = asteroidTextures[Random.Range(0, asteroidTextures.Length)];
-
-            renderer.material.SetTexture("_BaseMap", tex);
-
+            MaterialPropertyBlock block = new MaterialPropertyBlock();
+            r.GetPropertyBlock(block);
+            block.SetTexture("_BaseMap", asteroidTextures[Random.Range(0, asteroidTextures.Length)]);
+            r.SetPropertyBlock(block);
         }
 
         currentAsteroids++;
     }
-    GameObject GetRandomAsteroid()
+
+    // ===================== ВСПОМОГАТЕЛЬНОЕ =====================
+
+    bool ValidPosition(Vector3 pos) => pos.magnitude <= fieldRadius * 1.5f && currentAsteroids < maxAsteroids;
+
+    bool PassNoise(Vector3 pos)
     {
-        float total = 0f;
+        // НОВОВВЕДЕНИЕ: Если астероид в радиусе 300 от центра, он появляется со 100% шансом (игнорирует пустоты шума)
+        if (pos.magnitude < 300f) return true;
 
-        foreach (var g in asteroidGroups)
-            total += g.spawnChance;
-
-        float rand = Random.Range(0, total);
-
-        foreach (var g in asteroidGroups)
-        {
-            if (rand < g.spawnChance)
-                return GetRandom(g.prefabs);
-
-            rand -= g.spawnChance;
-        }
-
-        return null;
+        float scale = 0.002f;
+        float offset = 100000f; 
+        float noise = Mathf.PerlinNoise((pos.x + offset) * scale + seed, (pos.z + offset) * scale + seed);
+        return noise > 0.4f;
     }
-
-    float GetAsteroidScale(GameObject prefab)
-    {
-        foreach (var g in asteroidGroups)
-        {
-            if (System.Array.Exists(g.prefabs, p => p == prefab))
-            {
-                return Random.Range(g.scaleRange.x, g.scaleRange.y);
-            }
-        }
-
-        return 1000f;
-    }
-
-    // ===================== ОБЩЕЕ =====================
 
     bool IsTooClose(Vector3 pos, List<Vector3> existing, float minDistance)
     {
-        foreach (Vector3 p in existing)
-        {
-            if (Vector3.Distance(pos, p) < minDistance)
-                return true;
-        }
-
+        foreach (Vector3 p in existing) if (Vector3.Distance(pos, p) < minDistance) return true;
         return false;
+    }
+
+    (GameObject prefab, float scale) GetRandomAsteroidData()
+    {
+        float total = 0f;
+        foreach (var g in asteroidGroups) total += g.spawnChance;
+        
+        float rand = Random.Range(0, total);
+        foreach (var g in asteroidGroups)
+        {
+            if (rand < g.spawnChance) 
+            {
+                GameObject prefab = GetRandom(g.prefabs);
+                float scale = Random.Range(g.scaleRange.x, g.scaleRange.y);
+                return (prefab, scale);
+            }
+            rand -= g.spawnChance;
+        }
+        return (null, 100f);
     }
 
     Texture2D GetPlanetTexture(int type)
     {
-        switch (type)
-        {
-            case 0: return GetRandom(aridPlanets);
-            case 1: return GetRandom(barrenPlanets);
-            case 2: return GetRandom(dustyPlanets);
-            case 3: return GetRandom(grassPlanets);
-            case 4: return GetRandom(junglePlanets);
-            case 5: return GetRandom(marshPlanets);
-            case 6: return GetRandom(martianPlanets);
-            case 7: return GetRandom(methanePlanets);
-            case 8: return GetRandom(sandyPlanets);
-            case 9: return GetRandom(snowyPlanets);
-            case 10: return GetRandom(tundraPlanets);
-            case 11: return GetRandom(gasGiantPlanets);
-        }
-
-        return null;
+        return type switch {
+            0 => GetRandom(aridPlanets), 1 => GetRandom(barrenPlanets), 2 => GetRandom(dustyPlanets),
+            3 => GetRandom(grassPlanets), 4 => GetRandom(junglePlanets), 5 => GetRandom(marshPlanets),
+            6 => GetRandom(martianPlanets), 7 => GetRandom(methanePlanets), 8 => GetRandom(sandyPlanets),
+            9 => GetRandom(snowyPlanets), 10 => GetRandom(tundraPlanets), 11 => GetRandom(gasGiantPlanets),
+            _ => null
+        };
     }
 
-    GameObject GetRandom(GameObject[] array)
-    {
-        if (array == null || array.Length == 0)
-            return null;
-
-        return array[Random.Range(0, array.Length)];
-    }
-
-    Texture2D GetRandom(Texture2D[] array)
-    {
-        if (array == null || array.Length == 0)
-            return null;
-
-        return array[Random.Range(0, array.Length)];
-    }
+    T GetRandom<T>(T[] array) => (array == null || array.Length == 0) ? default : array[Random.Range(0, array.Length)];
 }
