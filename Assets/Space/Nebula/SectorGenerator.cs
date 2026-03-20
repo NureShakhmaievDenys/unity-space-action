@@ -5,25 +5,6 @@ public class SectorGenerator : MonoBehaviour
 {
     #region Settings Classes
     [System.Serializable]
-    public class ClusterSettings
-    {
-        public int minClusters = 3;
-        public int maxClusters = 6;
-        public int minAsteroids = 20;
-        public int maxAsteroids = 50;
-        public float clusterRadius = 400f; // Слегка увеличил для лучшего распределения в центре
-    }
-
-    [System.Serializable]
-    public class SuperClusterSettings
-    {
-        public int count = 1;
-        public int minAsteroids = 80;
-        public int maxAsteroids = 150;
-        public float radius = 800f;
-    }
-
-    [System.Serializable]
     public class SectorSkybox
     {
         public Material skybox;
@@ -31,27 +12,28 @@ public class SectorGenerator : MonoBehaviour
     }
 
     [System.Serializable]
-    public class AsteroidGroup
+    public class AsteroidPalette
     {
+        public string groupName = "Asteroid Group";
+        [Tooltip("Список префабов, которые попадут ИМЕННО в эту папку")]
         public GameObject[] prefabs;
-        public float spawnChance;
-        public Vector2 scaleRange;
+        public Vector2 scaleRange = new Vector2(0.8f, 1.2f);
     }
     #endregion
 
     [Header("Seed & Core")]
     public int seed = 12345;
-    public float fieldRadius = 2400f;
-
+    
     [Header("Skyboxes & Lighting")]
     public SectorSkybox[] skyboxes;
     public Light starLight;
 
-    [Header("Planets")]
+    [Header("Planets (Фон)")]
     public GameObject planetPrefab;
     public int minPlanets = 0;
     public int maxPlanets = 3;
-    public float sectorRadius = 40000f;
+    [Tooltip("Радиус, на котором генерятся планеты")]
+    public float sectorRadius = 40000f; 
     
     [Header("Planet Textures")]
     public Texture2D[] aridPlanets;
@@ -67,19 +49,35 @@ public class SectorGenerator : MonoBehaviour
     public Texture2D[] tundraPlanets;
     public Texture2D[] gasGiantPlanets;
 
-    [Header("Asteroids General")]
-    public int maxAsteroids = 500;
-    public Texture2D[] asteroidTextures;
-    public AsteroidGroup[] asteroidGroups;
+    [Header("Asteroids: Optimization (Атлас)")]
+    [Tooltip("Материал с галочкой GPU Instancing и твоей текстурой 4x2")]
+    public Material masterAsteroidMaterial;
+    public int atlasColumns = 4;
+    public int atlasRows = 2;
+    [Tooltip("Для URP оставь _BaseMap_ST. Для Standard шейдера напиши _MainTex_ST")]
+    public string shaderUVPropertyName = "_BaseMap_ST";
 
-    [Header("Asteroid Structures")]
-    public ClusterSettings clusters;
-    public SuperClusterSettings superClusters;
+    [Header("Asteroids: Eye of the Storm")]
+    [Tooltip("Радиус поля астероидов (зона полета)")]
+    public float asteroidFieldRadius = 10000f;
+    [Tooltip("Жесткий общий лимит астероидов")]
+    public int maxAsteroids = 1000;
+    [Tooltip("Общее кол-во попыток спавна. Будет разделено между группами.")]
+    public int spawnAttempts = 3000;
+    [Tooltip("Зона в центре (0,0,0) со 100% плотностью")]
+    public float solidCoreRadius = 500f;
+    [Tooltip("Кривая падения плотности от ядра к краю")]
+    public AnimationCurve densityDropoffCurve = AnimationCurve.EaseInOut(0, 1, 1, 0);
+    
+    [Header("Asteroid Prefabs")]
+    public AsteroidPalette[] asteroidPalettes;
 
     // Служебные переменные
-    private int currentAsteroids = 0;
+    private int currentAsteroidsCount = 0;
     private Transform planetsContainer;
     private Transform asteroidsContainer;
+    private MaterialPropertyBlock propertyBlock;
+    private Dictionary<string, Transform> groupContainers = new Dictionary<string, Transform>();
 
     void Start()
     {
@@ -91,32 +89,73 @@ public class SectorGenerator : MonoBehaviour
     {
         ClearSector();
         Random.InitState(seed);
+        propertyBlock = new MaterialPropertyBlock();
         CreateContainers();
 
         if (skyboxes != null && skyboxes.Length > 0)
         {
             SectorSkybox sector = skyboxes[Random.Range(0, skyboxes.Length)];
             RenderSettings.skybox = sector.skybox;
-            if (starLight != null) starLight.color = sector.sectorColor;
+            
+            if (starLight != null) 
+            {
+                starLight.color = sector.sectorColor;
+                
+                // ======= ДОБАВЛЕННАЯ СТРОКА =======
+                // Крутим невидимое "Солнце", чтобы свет падал с новой случайной стороны
+                // X (высота) от 10 до 80 градусов, Y (поворот) любые 360 градусов
+                starLight.transform.rotation = Quaternion.Euler(Random.Range(10f, 80f), Random.Range(0f, 360f), 0f);
+            }
             
             GeneratePlanets(sector.sectorColor);
-            GenerateAsteroids();
+        }
+
+        // ======= 3. ГЕНЕРАЦИЯ АСТЕРОИДОВ (НОВАЯ ЛОГИКА - ГАРАНТИРОВАННАЯ) =======
+        
+        if (asteroidPalettes != null && asteroidPalettes.Length > 0 && masterAsteroidMaterial != null)
+        {
+            // Сколько ПОПЫТОК спавна даем каждой группе (например 1000)
+            int attemptsPerGroup = spawnAttempts / asteroidPalettes.Length;
+
+            // ЦИКЛ ПО КАЖДОЙ ГРУППЕ В ИНСПЕКТОРЕ
+            foreach (var group in asteroidPalettes)
+            {
+                if (group.prefabs == null || group.prefabs.Length == 0) continue;
+
+                // Для каждой группы выбираем свои 2-3 случайные модели
+                List<GameObject> groupModelsForSector = PickLimitedModelsFromSpecificList(group.prefabs, 3);
+
+                // Ищем папку-родителя для этой группы
+                if (groupContainers.TryGetValue(group.groupName, out Transform parentFolder))
+                {
+                    // Генерируем астероиды ТОЛЬКО этой группы ИМЕННО в эту папку
+                    GenerateEyeOfTheStormForGroup(groupModelsForSector, parentFolder, group.scaleRange, attemptsPerGroup);
+                }
+            }
+
+            Debug.Log($"<color=cyan>Сектор сгенерирован!</color> Итого астероидов: {currentAsteroidsCount}.");
+
+            // ======= ПОКА ОСТАВИМ ТАК (ты удалил каллинг, но на будущее задел) =======
+            // Мы просто ищем скрипт на сцене, если не найдем - ничего страшного, Unity не вылетит.
+          
+            // =========================================================================
         }
         else
         {
-            Debug.LogError("Skyboxes not assigned!");
+            Debug.LogError("Назначь Master Asteroid Material и Asteroid Palettes!");
         }
     }
 
     void ClearSector()
     {
-        currentAsteroids = 0;
+        currentAsteroidsCount = 0;
         for (int i = transform.childCount - 1; i >= 0; i--)
         {
             GameObject child = transform.GetChild(i).gameObject;
             if (Application.isPlaying) Destroy(child);
             else DestroyImmediate(child);
         }
+        groupContainers.Clear();
     }
 
     void CreateContainers()
@@ -126,56 +165,146 @@ public class SectorGenerator : MonoBehaviour
 
         asteroidsContainer = new GameObject("--- ASTEROIDS ---").transform;
         asteroidsContainer.SetParent(this.transform);
+
+        groupContainers.Clear();
+        if (asteroidPalettes != null)
+        {
+            foreach (var group in asteroidPalettes)
+            {
+                if (!string.IsNullOrEmpty(group.groupName) && !groupContainers.ContainsKey(group.groupName))
+                {
+                    GameObject groupFolder = new GameObject(group.groupName);
+                    groupFolder.transform.SetParent(asteroidsContainer);
+                    groupContainers.Add(group.groupName, groupFolder.transform);
+                }
+            }
+        }
     }
 
-    // ===================== ПЛАНЕТЫ =====================
+    // ===================== АСТЕРОИДЫ (НОВАЯ ЛОГИКА) =====================
+
+    // Метод генерирует subset астероидов специально для одной группы
+    void GenerateEyeOfTheStormForGroup(List<GameObject> modelsForGroup, Transform parent, Vector2 scaleRange, int attempts)
+    {
+        float fadeRange = asteroidFieldRadius - solidCoreRadius;
+
+        for (int i = 0; i < attempts; i++)
+        {
+            if (currentAsteroidsCount >= maxAsteroids) break; // Общий лимит не превышаем
+
+            Vector3 randomPos = Random.insideUnitSphere * asteroidFieldRadius;
+            float distFromCenter = randomPos.magnitude;
+            float spawnChance = 0f;
+
+            if (distFromCenter <= solidCoreRadius) spawnChance = 1f; 
+            else
+            {
+                float normalizedDist = (distFromCenter - solidCoreRadius) / fadeRange;
+                spawnChance = densityDropoffCurve.Evaluate(normalizedDist);
+            }
+
+            if (Random.value < spawnChance)
+            {
+                // Выбираем модель ТОЛЬКО из моделей ЭТОЙ группы
+                GameObject proto = modelsForGroup[Random.Range(0, modelsForGroup.Count)];
+                
+                // Передаем родителя и scale напрямую в метод спавна
+                SpawnOptimizedAsteroid(randomPos, proto, parent, scaleRange);
+            }
+        }
+    }
+
+    // Метод спавна упрощен. Он не ищет родителей, он их принимает.
+    void SpawnOptimizedAsteroid(Vector3 pos, GameObject proto, Transform parent, Vector2 scaleRange)
+    {
+        GameObject asteroid = Instantiate(proto, pos, Random.rotation, parent);
+        float scale = Random.Range(scaleRange.x, scaleRange.y);
+        asteroid.transform.localScale = Vector3.one * scale;
+
+        // --- МАГИЯ АТЛАСА ---
+        Renderer r = asteroid.GetComponentInChildren<Renderer>();
+        if (r != null)
+        {
+            int totalTextures = atlasColumns * atlasRows;
+            int randomTexIndex = Random.Range(0, totalTextures);
+
+            float scaleX = 1f / atlasColumns;
+            float scaleY = 1f / atlasRows;
+
+            int col = randomTexIndex % atlasColumns;
+            int row = randomTexIndex / atlasColumns;
+            int invertedRow = (atlasRows - 1) - row; 
+
+            float offsetX = col * scaleX;
+            float offsetY = invertedRow * scaleY;
+
+            Vector4 uvTransform = new Vector4(scaleX, scaleY, offsetX, offsetY);
+
+            r.GetPropertyBlock(propertyBlock);
+            propertyBlock.SetVector(shaderUVPropertyName, uvTransform);
+            r.SetPropertyBlock(propertyBlock);
+        }
+
+        currentAsteroidsCount++;
+    }
+
+    // Выбирает limited subset моделей ИЗ КОНКРЕТНОГО СПИСКА (для группы)
+    List<GameObject> PickLimitedModelsFromSpecificList(GameObject[] availablePrefabs, int count)
+    {
+        List<GameObject> tempPool = new List<GameObject>(availablePrefabs);
+        List<GameObject> result = new List<GameObject>();
+
+        if (tempPool.Count == 0) return result;
+
+        int finalCount = Mathf.Min(count, tempPool.Count);
+        for (int i = 0; i < finalCount; i++)
+        {
+            int index = Random.Range(0, tempPool.Count);
+            result.Add(tempPool[index]);
+            tempPool.RemoveAt(index);
+        }
+        return result;
+    }
+
+    // ===================== ПЛАНЕТЫ (Без изменений) =====================
 
     void GeneratePlanets(Color sectorColor)
     {
         if (planetPrefab == null) return;
-
         int planetCount = Random.Range(minPlanets, maxPlanets + 1);
         List<Vector3> planetPositions = new List<Vector3>();
-
         for (int i = 0; i < planetCount; i++)
         {
             Vector3 position;
             int attempts = 0;
-            do {
-                position = Random.onUnitSphere * sectorRadius;
-                attempts++;
+            do { position = Random.onUnitSphere * sectorRadius; attempts++;
             } while (IsTooClose(position, planetPositions, 20000f) && attempts < 50);
-
             planetPositions.Add(position);
             GameObject planet = Instantiate(planetPrefab, position, Quaternion.identity, planetsContainer);
-            planet.name = $"Planet_{i}";
-            SetupPlanet(planet, sectorColor);
+            planet.name = $"Planet_{i}"; SetupPlanet(planet, sectorColor);
         }
     }
 
     void SetupPlanet(GameObject planet, Color sectorColor)
-    {
+    {if (planet.GetComponent<PlanetRotation>() == null)
+        {
+            planet.AddComponent<PlanetRotation>();
+        }
+        
         Renderer renderer = planet.GetComponentInChildren<Renderer>();
         if (renderer == null) return;
-
-        int type = Random.Range(0, 12);
-        Texture2D texture = GetPlanetTexture(type);
-        
-        MaterialPropertyBlock propBlock = new MaterialPropertyBlock();
-        renderer.GetPropertyBlock(propBlock);
-        if (texture != null) propBlock.SetTexture("_BaseMap", texture);
-        renderer.SetPropertyBlock(propBlock);
-
+        int type = Random.Range(0, 12); Texture2D texture = GetPlanetTexture(type);
+        MaterialPropertyBlock planetBlock = new MaterialPropertyBlock();
+        renderer.GetPropertyBlock(planetBlock);
+        if (texture != null) planetBlock.SetTexture("_BaseMap", texture);
+        renderer.SetPropertyBlock(planetBlock);
         float size = (type == 11) ? Random.Range(15000f, 25000f) : Random.Range(5000f, 12000f);
         planet.transform.localScale = Vector3.one * size;
         planet.transform.rotation = Quaternion.Euler(Random.Range(-35f, 35f), Random.Range(0f, 360f), 0f);
-
         Transform atmosphere = planet.transform.Find("PlanetAtmosphere");
-        if (atmosphere != null)
-        {
+        if (atmosphere != null) {
             Renderer atmRenderer = atmosphere.GetComponent<Renderer>();
-            if (atmRenderer != null) 
-            {
+            if (atmRenderer != null) {
                 MaterialPropertyBlock atmBlock = new MaterialPropertyBlock();
                 atmRenderer.GetPropertyBlock(atmBlock);
                 atmBlock.SetColor("_BaseColor", sectorColor);
@@ -184,121 +313,10 @@ public class SectorGenerator : MonoBehaviour
         }
     }
 
-    // ===================== АСТЕРОИДЫ =====================
-
-    void GenerateAsteroids()
-    {
-        if (asteroidGroups == null || asteroidGroups.Length == 0) return;
-
-        Transform clustersParent = new GameObject("Clusters").transform;
-        clustersParent.SetParent(asteroidsContainer);
-
-        Transform superParent = new GameObject("Super Clusters").transform;
-        superParent.SetParent(asteroidsContainer);
-
-        GenerateClusters(clustersParent);
-        GenerateSuperClusters(superParent);
-    }
-
-    void GenerateClusters(Transform parent)
-    {
-        int count = Random.Range(clusters.minClusters, clusters.maxClusters);
-        for (int c = 0; c < count; c++)
-        {
-            Transform clusterFolder = new GameObject($"Cluster_{c}").transform;
-            clusterFolder.SetParent(parent);
-
-            // Центр кластера немного смещен от 0,0,0 чтобы они не слипались в одну точку
-            Vector3 center = Random.insideUnitSphere * clusters.clusterRadius;
-            int amount = Random.Range(clusters.minAsteroids, clusters.maxAsteroids);
-
-            for (int i = 0; i < amount; i++)
-            {
-                Vector3 pos = center + Random.insideUnitSphere * clusters.clusterRadius;
-                if (ValidPosition(pos) && PassNoise(pos)) SpawnAsteroid(pos, clusterFolder);
-            }
-        }
-    }
-
-    void GenerateSuperClusters(Transform parent)
-    {
-        for (int c = 0; c < superClusters.count; c++)
-        {
-            Transform folder = new GameObject($"SuperCluster_{c}").transform;
-            folder.SetParent(parent);
-
-            // Суперкластер всегда в самом центре
-            Vector3 center = Vector3.zero;
-            int amount = Random.Range(superClusters.minAsteroids, superClusters.maxAsteroids);
-
-            for (int i = 0; i < amount; i++)
-            {
-                Vector3 pos = center + Random.insideUnitSphere * superClusters.radius;
-                if (ValidPosition(pos) && PassNoise(pos)) SpawnAsteroid(pos, folder);
-            }
-        }
-    }
-
-    void SpawnAsteroid(Vector3 pos, Transform parent)
-    {
-        if (currentAsteroids >= maxAsteroids) return;
-
-        var asteroidData = GetRandomAsteroidData();
-        if (asteroidData.prefab == null) return;
-
-        GameObject asteroid = Instantiate(asteroidData.prefab, pos, Random.rotation, parent);
-        asteroid.transform.localScale = Vector3.one * asteroidData.scale;
-
-        Renderer r = asteroid.GetComponentInChildren<Renderer>();
-        if (r != null && asteroidTextures.Length > 0)
-        {
-            MaterialPropertyBlock block = new MaterialPropertyBlock();
-            r.GetPropertyBlock(block);
-            block.SetTexture("_BaseMap", asteroidTextures[Random.Range(0, asteroidTextures.Length)]);
-            r.SetPropertyBlock(block);
-        }
-
-        currentAsteroids++;
-    }
-
-    // ===================== ВСПОМОГАТЕЛЬНОЕ =====================
-
-    bool ValidPosition(Vector3 pos) => pos.magnitude <= fieldRadius * 1.5f && currentAsteroids < maxAsteroids;
-
-    bool PassNoise(Vector3 pos)
-    {
-        // НОВОВВЕДЕНИЕ: Если астероид в радиусе 300 от центра, он появляется со 100% шансом (игнорирует пустоты шума)
-        if (pos.magnitude < 300f) return true;
-
-        float scale = 0.002f;
-        float offset = 100000f; 
-        float noise = Mathf.PerlinNoise((pos.x + offset) * scale + seed, (pos.z + offset) * scale + seed);
-        return noise > 0.4f;
-    }
-
     bool IsTooClose(Vector3 pos, List<Vector3> existing, float minDistance)
     {
         foreach (Vector3 p in existing) if (Vector3.Distance(pos, p) < minDistance) return true;
         return false;
-    }
-
-    (GameObject prefab, float scale) GetRandomAsteroidData()
-    {
-        float total = 0f;
-        foreach (var g in asteroidGroups) total += g.spawnChance;
-        
-        float rand = Random.Range(0, total);
-        foreach (var g in asteroidGroups)
-        {
-            if (rand < g.spawnChance) 
-            {
-                GameObject prefab = GetRandom(g.prefabs);
-                float scale = Random.Range(g.scaleRange.x, g.scaleRange.y);
-                return (prefab, scale);
-            }
-            rand -= g.spawnChance;
-        }
-        return (null, 100f);
     }
 
     Texture2D GetPlanetTexture(int type)
@@ -307,8 +325,7 @@ public class SectorGenerator : MonoBehaviour
             0 => GetRandom(aridPlanets), 1 => GetRandom(barrenPlanets), 2 => GetRandom(dustyPlanets),
             3 => GetRandom(grassPlanets), 4 => GetRandom(junglePlanets), 5 => GetRandom(marshPlanets),
             6 => GetRandom(martianPlanets), 7 => GetRandom(methanePlanets), 8 => GetRandom(sandyPlanets),
-            9 => GetRandom(snowyPlanets), 10 => GetRandom(tundraPlanets), 11 => GetRandom(gasGiantPlanets),
-            _ => null
+            9 => GetRandom(snowyPlanets), 10 => GetRandom(tundraPlanets), 11 => GetRandom(gasGiantPlanets), _ => null
         };
     }
 
